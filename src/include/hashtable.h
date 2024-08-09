@@ -56,6 +56,7 @@ typedef struct hashtable_bucket_t {
 
 
 
+
 /**
  * @brief Describes the hash table. The hash table holds buckets with linked lists.
  * 
@@ -85,6 +86,8 @@ typedef struct hashtable_t {
                                                             METHODS / FUNCTIONS
 [**************************************************************************************************************************************************]
 */
+
+
 
 /**
  * @brief Creates a hash bucket initializing the linked list in the bucket.
@@ -116,7 +119,7 @@ void hashbucket_delete(hashtable_bucket_t *bucket) {
     hashtable_bucket_item *h1, *h2;
     h1 = LIST_FIRST(&bucket->list);
     while( h1 != NULL ) {
-        h2 = LIST_NEXT(h2, entries);
+        h2 = LIST_NEXT(h1, entries);
         free(h1);
         h1 = h2;
     }
@@ -324,5 +327,33 @@ bool hashtable_remove(hashtable_t *table, char *key) {
     return true;
     
 }
+
+
+
+void hashtable_display(hashtable_t *table) {
+    
+
+    for(uint32_t i = 0; i < table->size + 1; i++) {
+
+        /* Get bucket */
+        hashtable_bucket_t *bucket = table->buckets[i];
+        if(bucket != NULL) {
+            /* Check if list in bucket is empty or not */
+            if(LIST_EMPTY(&bucket->list)) {
+                continue;
+            }
+            else {
+                hashtable_bucket_item *n1 = LIST_FIRST(&bucket->list);
+                while (n1 != NULL) {
+                    printf("%s -> %s\n", n1->key, n1->value);
+                    n1 = LIST_NEXT(n1, entries);
+                }
+            }
+        }
+
+    }
+}
+
+   
 
 #endif

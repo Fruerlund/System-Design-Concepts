@@ -23,6 +23,7 @@
 [**************************************************************************************************************************************************]
 */
 
+#define MAX_NUMBER_HEADERS 36
 
 /**
  * @brief Describes an instance of a server that the load balancer can forward to.
@@ -81,6 +82,22 @@ typedef struct queue_t {
 
 } queue_t;
 
+typedef struct http_response_header_t {
+
+    char *header;
+    size_t header_size;
+
+} http_response_header_t;
+
+
+typedef struct http_response_t {
+
+    struct http_response_header_t **headers;          /* Maximum support of MAX_NUMBER_HEADERS headers */ // Replace with hash table instead 
+    hashtable_t *headers_table;
+    size_t numberofheaders;
+    size_t response_size;
+
+} http_response_t;
 
 /* 
 [**************************************************************************************************************************************************]

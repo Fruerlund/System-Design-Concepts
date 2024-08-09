@@ -21,7 +21,7 @@
 */
 
 #define MAX_BUFFER_SIZE 4096 * 8
-
+#define MAX_HEADER_SIZE 1028
 
 /* Condition variables/flag to terminate coordinator threads */
 pthread_mutex_t mutexCoordinatorForwardTerminate = PTHREAD_MUTEX_INITIALIZER;
@@ -40,6 +40,86 @@ queue_t requests;
 [**************************************************************************************************************************************************]
 */
 
+
+size_t readparseHTTPHeader(http_response_t *headers, int forwarderfd) {
+
+    char responseHeaders[MAX_HEADER_SIZE] = { 0 };
+    char endofheaderspattern[4] = {0x0d, 0x0a, 0x0d, 0x0a};
+    size_t headerSize = 0;
+
+    headers->headers_table = hashtable_create(MAX_NUMBER_HEADERS, hashtable_hash);
+    headers->numberofheaders = 0;
+
+    while(true) {
+        headerSize += read(forwarderfd, &responseHeaders[headerSize], 1);
+        if(headerSize >= 4) {
+            if(memcmp( &responseHeaders[headerSize - 4], endofheaderspattern, 4) == 0) {
+                break;
+            }
+        }
+    }
+
+
+    /* Parse headers into appropiate structures for easy manipulation */
+    headers->response_size = headerSize;
+    headers->headers = calloc( (size_t)MAX_NUMBER_HEADERS, sizeof(struct http_response_header_t));
+
+    char *header = strtok(responseHeaders, "\r\n");
+
+    if(header != NULL) {
+        
+        http_response_header_t *h = NULL;
+        int header_count = 0;
+
+        while(header != NULL) {
+
+            h = (http_response_header_t *)malloc(sizeof(struct http_response_header_t));
+            strncat(header, "\r\n", 2);
+            h->header = strdup(header);
+            h->header_size = strlen(h->header);
+            headers->headers[header_count] = h;
+            header_count++;
+
+            if(header_count == MAX_NUMBER_HEADERS) {
+                break;
+            }
+
+            header = strtok(NULL, "\r\n");
+        }
+
+        headers->numberofheaders = header_count;
+
+    }
+
+    /* Add headers to hash table for easy retrieval This is breaking code */
+    for(uint32_t i = 0; i < headers->numberofheaders; i++) {
+
+        char *h = strdup(headers->headers[i]->header);
+        char *field = strtok(h, ":");
+        char *value = strtok(NULL, ":");
+
+        if(field != NULL && value != NULL) {
+            hashtable_insert(headers->headers_table, field, value);
+        }
+    }
+
+    return headerSize;
+    
+}
+
+void sendHTTPHeaders(http_response_t *headers, uint32_t fd) {
+
+    for(uint32_t i = 0; i < headers->numberofheaders; i++) {
+        char *head = headers->headers[i]->header;
+        size_t len = headers->headers[i]->header_size;
+        send(fd, head, len, MSG_NOSIGNAL);
+    }
+
+    /* Mark end of headers */
+    send(fd, "\r\n", 2, MSG_NOSIGNAL);
+
+}
+
 /**
  * @brief Forwards data from a given request to the specified load server. The data is read back in buffers from the load server and sent back to the client. 
  * 
@@ -53,8 +133,13 @@ size_t buffered_sr(struct connection_t *connection, struct forwarder_t *forwarde
     char ip_str[INET6_ADDRSTRLEN];
     char ip_str_forwarder[INET6_ADDRSTRLEN];
 
+    char serverResponse[MAX_BUFFER_SIZE] = { 0 };    
+    size_t headerSize = 0;
+
     void *ip_addr;
     void *ip_addr_forwarder;
+
+    
 
     /* Get local copies of client fd */
     int clientfd = connection->clientfd;
@@ -74,7 +159,7 @@ size_t buffered_sr(struct connection_t *connection, struct forwarder_t *forwarde
         pthread_exit(NULL);
     }
 
-    /* Send original request as a single packet request. */
+    /* Forward original request as a single packet request. */
     int bytesSent = send(forwarderfd, connection->request, connection->size, MSG_NOSIGNAL);
     if(bytesSent < 0) {
         perror("sigpipe");
@@ -83,29 +168,55 @@ size_t buffered_sr(struct connection_t *connection, struct forwarder_t *forwarde
     }
     
     printf("(FWD) [IP: %s | Port: %d | Byte(s): %d ]\t-->\t[ IP: %s | Port: %d ]\n", ip_str, ntohs(connection->address.sin_port), bytesSent, ip_str_forwarder, ntohs(forwarder->address.sin_port));
-
-    /* Get buffered response from server and send to client. Repeat until no more data. */
-    char serverResponse[MAX_BUFFER_SIZE] = { 0 };
     bytesSent = 0;
-    while(true) {
 
+    /* Read response headers by reading a single byte at a time and comparing until we find end of headers*/
+    struct http_response_t *headers = (http_response_t *)malloc(sizeof(struct http_response_t));
+    headerSize = readparseHTTPHeader(headers, forwarderfd);
+
+    /* Inject a Set-Cookie header into our response headers */
+    http_response_header_t *h  = (http_response_header_t *)malloc(sizeof(struct http_response_header_t));
+    char setCookie[256] = { 0 };
+    snprintf(setCookie, 256, "Set-Cookie: forwarderid=123\r\n\r\n");
+    h->header = strdup(setCookie);
+    h->header_size = strlen(h->header);
+    headers->headers[headers->numberofheaders] = h;
+    headers->numberofheaders++;
+
+    /* Update Content-Length, if any, to include new cookie */
+    /* TODO: */
+    
+    /* Write Response Headers */
+    sendHTTPHeaders(headers, forwarderfd);
+
+    /* Read remaining of HTTP Response in buffers and send to client. */    
+    while(true) {
         int bytesRecieved = read(forwarderfd, serverResponse, MAX_BUFFER_SIZE);
+
         if(bytesRecieved <= 0) {
             break;
         }
 
         int sent = send(clientfd, serverResponse, bytesRecieved, MSG_NOSIGNAL);
+
         if(sent <= -1) {
             break;
         }
         bytesSent += sent;
     }
 
+
     printf("(RET) [IP: %s | Port: %d | Byte(s): %d ]\t<--\t[ IP: %s | Port: %d ]\n", ip_str, ntohs(connection->address.sin_port), bytesSent, ip_str_forwarder, ntohs(forwarder->address.sin_port));
 
     /* Close used sockets */
     close(forwarderfd);
     close(clientfd);
+
+    /* Free allocated memory */
+    for(uint32_t i = 0; i < headers->numberofheaders; i++) {
+        free(headers->headers[i]);
+    }
+    free(headers);
 
     return bytesSent;
 }
@@ -121,10 +232,6 @@ void * consumerForwardSingleRequest(void *data) {
 
     struct connection_t *connection = (connection_t *)data;
     struct forwarder_t *forwarder = servers.forwarders[connection->forwarderindex];
-
-    /* TO DO: Add X-FORWARDED-FOR Header */
-
-    /* TO DO: Set clientID cookie for subsequent reuse */
 
     /* Open a connection to backend server */
     int socketfd = -1;
@@ -143,7 +250,6 @@ void * consumerForwardSingleRequest(void *data) {
     size_t dataTransfered = buffered_sr(connection, forwarder, socketfd);
   
     /* Free allocated structures */
-
     free(connection->request);
     free(connection);
 }
@@ -219,7 +325,6 @@ int32_t httpGetForwardCookie(char *buffer, size_t size) {
     regmatch_t matches[2];
     
     /* Regex Logic to extract the cookie forwaderid from the HTTP Request if one exists */
-
     if(regexec(&regex, buffer, 2, matches, 0) == 0) {
         
         int start = matches[1].rm_so;
