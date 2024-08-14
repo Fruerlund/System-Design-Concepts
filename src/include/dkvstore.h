@@ -16,7 +16,7 @@
 
 #include "common-defines.h"
 #include "./hashtable.h"
-
+#include "./hashring.h"
 /* 
 [**************************************************************************************************************************************************]
                                                             KEY, VALUE STORE 
@@ -49,66 +49,7 @@
 
 #define STORE_TABLEMAXSIZE          1024
 
-/**
- * @brief Describes a element in the hash ring that holds a key, value pair.
- */
-typedef struct redis_ring_t_data {
-
-    char *key;
-    char *value;
-    uint32_t hash;
-    
-} redis_ring_t_data;
-
-
-/**
- * @brief Describes a element in the hash ring that represents a data store.
- */
-typedef struct redis_ring_t_server {
-
-    struct sockaddr_in address;         /* IP and PORT */
-    size_t size;                        /* Number of key, value pairs in hash server */
-    
-} redis_ring_t_server;
-
-/**
- * @brief Describes a empty element in the hash ring.
- */
-typedef struct redis_ring_t_empty {
-
-} redis_ring_t_empty;
-
-
-
-/**
- * @brief Describes a chunk of the hash ring that either represents a empty spot, data store or key, value, pair
- */
-typedef struct redis_ring_element_t {
-
-    struct redis_ring_t *left;          /* Pointer to left slice */
-    struct redis_ring_t *right;         /* Pointer to right slice*/
-    uint8_t type;                       /* Used to indicate the type(empty, data or server) that his slice holds */
-
-    union ring_type {
-        redis_ring_t_server *server;
-        redis_ring_t_data *data;
-        redis_ring_t_empty *empty;
-    } ring_type;
-
-
-} redis_ring_element_t;
-
-
-/**
- * @brief Describes a hash ring using consistent hashing.
- */
-typedef struct redis_ring_t {
-
-    size_t size;                        /* Size of the hash ring */
-    size_t count;                       /* Current elemenets in hash ring */
-    struct redis_ring_element_t **start;
-
-} redis_ring_t;
+#define MAX_SERVERS                 100
 
 /* 
 [**************************************************************************************************************************************************]
@@ -152,15 +93,17 @@ typedef struct http_header_t {
  */
 typedef struct http_packet_t {
 
-    struct http_header_t **headers;          /* Maximum support of MAX_NUMBER_HEADERS headers */
-    hashtable_t *headers_table;
-    uint8_t type;                            /* Method, GET, POST etc. */
-    size_t numberofheaders;
-    size_t headersize;
+    struct http_header_t **headers;         /* Maximum support of MAX_NUMBER_HEADERS headers */
+    hashtable_t *headers_table;             /* Hash table containing key -> header mappings */
+    uint8_t type;                           /* Method, GET, POST etc. */
+    size_t numberofheaders;                 /* Number of parsed headers */
+    size_t headersize;                      /* Total size of headers in bytes */
     size_t totalsize;
-    size_t datasize;
-    char *httpData;
+    size_t datasize;                        /* Total size of request data*/
+    char *httpData;                         /* Pointer to request data if any*/
     int clientfd;                           /* File descriptor from which the packet originated.*/
+    char *originalRequest;                  /* Unmodified original request */
+    size_t originalRequestSize;             /* Size of unmodified original request.*/
 
 } http_packet_t;
 
@@ -187,5 +130,7 @@ typedef struct queue_requests_t {
 } queue_requests_t;
 
 
+
+int32_t coordinator_requestForward(ring_element_t *, http_packet_t *h);
 
 #endif /* DKVSTORE_H */

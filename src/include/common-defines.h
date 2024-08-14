@@ -27,5 +27,7 @@
 #include <sys/types.h>
 #include <unistd.h> 
 #include <sys/syscall.h>
+#include <getopt.h>
+
 #define gettid() syscall(SYS_gettid)
 #endif

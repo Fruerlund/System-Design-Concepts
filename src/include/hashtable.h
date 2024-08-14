@@ -148,7 +148,7 @@ hashtable_t * hashtable_create(uint32_t size, hashtable_hashmethod hashmethod) {
     table->size = size;
     table->count = 0;
 
-    table->buckets = calloc((size_t)table->size, sizeof(hashtable_bucket_t *));
+    table->buckets = malloc(table->size * sizeof(hashtable_bucket_t *));
 
     for(uint32_t i = 0; i < size; i++) {
         table->buckets[i] = hashbucket_create();
@@ -281,6 +281,7 @@ bool hashtable_insert(hashtable_t *table, char *key, char *value) {
     n1->value = strdup(value);
     LIST_INSERT_HEAD(&bucket->list, n1, entries);
 
+    //printf("[*]: Inserted key %s at index: %d\n", key, index);
 
     table->count++;
     

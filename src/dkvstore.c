@@ -14,33 +14,44 @@
 
 #include "./include/dkvstore.h"
 
-
 /* 
 [**************************************************************************************************************************************************]
                                                             GLOBAL VARIABLES AND DEFINES
 [**************************************************************************************************************************************************]
 */
 
-uint8_t serverType = SERVER_TYPE_STORE;   /* Represents if this server will become a coordinator or a data store. */
+/* Represents if this server will become a coordinator or a data store. */
+uint8_t serverType = SERVER_TYPE_STORE;  
 
+/* Holds requests to be processed. */
 queue_requests_t *http_queue = NULL;
+
+/* A store for holding key value pairs */
 hashtable_t *store = NULL;
+
+/* A hash ring using consistent hashing */
+hashring_t *ring = NULL;
+
+/* Flag for threads to signal program exit*/
 bool program_doexit = false;
+
+void help(void) {
+
+    printf("Usage: program_name [-t type] [-s stores] [-h]\n");
+    printf("Options:\n");
+    printf("  -t, --type   Specify the type of server.\n");
+    printf("  -s, --store  Specify the stores to be used. (e.g. 127.0.0.1:5555,127.0.0.1:6666).\n");
+    printf("  -p, --port   Local port to run server on.\n");
+    printf("  -h, --help   Show this help message.\n");
+    exit(EXIT_SUCCESS);
+
+}
+
 /*
 [**************************************************************************************************************************************************]
                                                             METHODS / FUNCTIONS
 [**************************************************************************************************************************************************]
 */
-
-
-/* 
-[**************************************************************************************************************************************************]
-                                                            MAIN
-[**************************************************************************************************************************************************]
-*/
-
-/*****************************************************************************************************************************************************************************/
-
 
 /**
  * @brief A generic method for sending a HTTP Reply with a specific status code
@@ -61,6 +72,7 @@ uint32_t sendHTTPCode(int fd, int code) {
             snprintf(reply, MAX_BUFFER_SIZE,
             "HTTP/1.1 500 Internal Server Error\r\n"
             "Content-Type: text/plain\r\n"
+            "Connection: close\r\n"
             "\r\n"
             "HTTP 500 Internal Server Error"
             "\r\n\r\n");
@@ -81,6 +93,7 @@ uint32_t sendHTTPCode(int fd, int code) {
             snprintf(reply, MAX_BUFFER_SIZE,
             "HTTP/1.1 400 Bad Request\r\n"
             "Content-Type: text/plain\r\n"
+            "Connection: close\r\n"
             "\r\n"
             "HTTP 400 Bad Request"
             "\r\n\r\n");
@@ -91,6 +104,7 @@ uint32_t sendHTTPCode(int fd, int code) {
             snprintf(reply, MAX_BUFFER_SIZE,
             "HTTP/1.1 404 Not Found\r\n"
             "Content-Type: text/plain\r\n"
+            "Connection: close\r\n"
             "\r\n"
             "HTTP 404 Not Found"
             "\r\n\r\n");
@@ -100,6 +114,7 @@ uint32_t sendHTTPCode(int fd, int code) {
             snprintf(reply, MAX_BUFFER_SIZE,
             "HTTP/1.1 501 Not Implemented\r\n"
             "Content-Type: text/plain\r\n"
+            "Connection: close\r\n"
             "\r\n"
             "HTTP 501 Not Implemented"
             "\r\n\r\n");
@@ -135,6 +150,7 @@ uint32_t requestParseHeaders(http_packet_t *h, char *buffer, size_t size) {
     /* Initialize packet*/
     h->headers = (http_header_t **)malloc( MAX_HEADERS * sizeof(http_header_t *));
     
+    memset(h->headers, '\x00', sizeof(http_header_t *) * MAX_HEADERS);
     /* Create Header Table */
     h->headers_table = hashtable_create(MAX_HEADERS, hashtable_hash);
 
@@ -225,10 +241,15 @@ uint32_t requestParse(http_packet_t *h, char *buffer, size_t size) {
 
    /* If request is POST, parse the POST data */
     if(strcmp(method, "POST") == 0) {
+
         h->datasize = size - h->headersize;
+
         h->httpData = (char *)malloc(h->datasize);
+
         memcpy(h->httpData, &buffer[h->headersize], h->datasize);
+
         h->type = HTTP_POST;
+
     }
 
     else if(strcmp(method, "GET") == 0) {
@@ -240,6 +261,28 @@ uint32_t requestParse(http_packet_t *h, char *buffer, size_t size) {
     }
 
     return EXIT_SUCCESS;
+
+}
+
+
+uint32_t requestToBuffer(http_packet_t *h, char *buffer, size_t maxsize) {
+
+    memset(buffer, '\x00', maxsize);
+    int offset = 0;
+    for(uint32_t i = 0; i < h->numberofheaders; i++) {
+        memcpy(buffer+offset, h->headers[i]->header, h->headers[i]->header_size);
+        offset += h->headers[i]->header_size;
+    }
+
+    char delim[2] = {0x0D, 0x0A};
+    memcpy(buffer + offset, delim, 2);
+    offset += 2;
+
+    memcpy(buffer + offset, h->httpData, h->datasize);
+
+    offset += h->datasize;
+
+    return offset;
 
 }
 
@@ -258,9 +301,10 @@ uint32_t requestHandle(http_packet_t *h) {
     switch(h->type) {
 
         case HTTP_POST:
-
+        
+            char *http_data_copy = strdup(h->httpData);
             /* Get command and command data */
-            char *op = strtok(h->httpData, "&");
+            char *op = strtok(http_data_copy, "&");
             char *opdata = strtok(NULL, "&");
             if(op == NULL || opdata == NULL) {
                 sendHTTPCode(h->clientfd, 400);
@@ -282,34 +326,73 @@ uint32_t requestHandle(http_packet_t *h) {
 
 
             if(strcmp(op_value, "GET") == 0) {
-
-                hashtable_bucket_item *r = NULL;
-                if ( ( r = hashtable_lookup(store, op_datavalue)) == NULL) {
-                    sendHTTPCode(h->clientfd, 404);
+                
+                if(serverType == SERVER_TYPE_STORE) {
+                    hashtable_bucket_item *r = NULL;
+                    if ( ( r = hashtable_lookup(store, op_datavalue)) == NULL) {
+                        sendHTTPCode(h->clientfd, 404);
+                    }
+                    else {
+                        char reply[4096];
+                        memset(reply, '\x00', sizeof(char) * 4096);
+                        snprintf(reply, 4096,
+                        "HTTP/1.1 200 Ok\r\n"
+                        "Content-Type: text/plain\r\n"
+                        "Content-Length: %d\r\n"
+                        "Connection: close\r\n"
+                        "\r\n"
+                        "%s=%s", ( strlen(r->key) + 1 + strlen(r->value)), r->key, r->value);
+                        write(h->clientfd, reply, strlen(reply));
+                    }
                 }
-                else {
-                    char reply[4096];
-                    memset(reply, '\x00', sizeof(char) * 4096);
-                    snprintf(reply, 4096,
-                    "HTTP/1.1 200 Ok\r\n"
-                    "Content-Type: text/plain\r\n"
-                    "Content-Length: 8\r\n"
-                    "\r\n");
 
-                    write(h->clientfd, reply, strlen(reply));
+                if(serverType == SERVER_TYPE_COORDINATOR) {
+                    ring_element_t *e = hashring_lookupkey(ring, op_datavalue);
+                    if(e == NULL) {
+                        sendHTTPCode(h->clientfd, 404);
+                    }
+                    else {
+                        coordinator_requestForward(e, h);
+                    }    
                 }
-                break;
+                break;                
             }
 
             if(strcmp(op_value, "SET") == 0) {
-                if ( hashtable_insert(store, op_datafield, op_datavalue) == true) {
-                    sendHTTPCode(h->clientfd, 200);
+
+                if(serverType == SERVER_TYPE_STORE) {
+                    if ( hashtable_insert(store, op_datafield, op_datavalue) == true) {
+                        sendHTTPCode(h->clientfd, 200);
+                    }
+                    else {
+                        sendHTTPCode(h->clientfd, 400);
+                    }
+                }
+                else {
+
+                    /* Insert key into hashring*/
+                    ring_element_t *e = NULL;
+                    e = hashring_addkey(ring, op_datafield);
+                    if(e == NULL) {
+                        sendHTTPCode(h->clientfd, 404);
+                        break;
+                    }
+
+                    /* Forward key, value to calculated store */
+                    coordinator_requestForward(e, h);
                 }
                 break;
             }
 
             if(strcmp(op_value, "REM") == 0) {
-
+                bool r = false;
+                if ( ( r = hashtable_remove(store, op_datavalue)) == false) {
+                    sendHTTPCode(h->clientfd, 404);
+                }
+                else {
+                    sendHTTPCode(h->clientfd, 200);
+                }
+                break;
             }
 
             if(strcmp(op_value, "ADD") == 0) {
@@ -318,6 +401,10 @@ uint32_t requestHandle(http_packet_t *h) {
 
             if(strcmp(op_value, "DEL") == 0) {
 
+            }
+
+            if(strcmp(op_value, "SYNC") == 0) {
+                /* Return all keys */
             }
 
 
@@ -351,20 +438,79 @@ uint32_t requestDestroy(http_packet_t *h) {
     hashtable_delete(h->headers_table);
 
     /* Destroy headers */
-    for(uint32_t i = 0; i< MAX_HEADERS; i++) {
+    for(uint32_t i = 0; i < MAX_HEADERS; i++) {
         if(h->headers[i] != NULL) {
             free(h->headers[i]->header);
             free(h->headers[i]);
         }
     }
 
-    free(h->headers);
+    free(h->originalRequest);
+    free(h->headers);   
+    free(h);
 
     return EXIT_SUCCESS;
 
 }
 
-http_packet_t * coordinator_requestForward(int socketfd) {
+int32_t coordinator_requestForward(ring_element_t *e, http_packet_t *h) {
+
+    /* Find store object */
+    ring_element_t *server = hashring_lookupserver(ring, e->element.data->store, e->element.data->port);
+    if(server == NULL) {
+        return -1;
+    }
+
+    /* Remove -(virtualnodeindicator) if exists */
+    char *ip = strtok(server->element.server->ip, "-");
+    int port = server->element.server->port;
+    struct sockaddr_in serv_addr;
+    socklen_t addr_size;
+
+    if(port < 0 || ip == NULL) {
+        return -1;
+    }
+    
+
+    /* Open a connection to store */
+    int socketfd = -1;
+    if ((socketfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+        printf("[-]: Socket creation error \n");
+        return -1;
+    }
+
+    /* If connection fails return a HTTP 500 */
+    
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(port);
+
+    // Convert IPv4 and IPv6 addresses from text to binary
+    // form
+    if (inet_pton(AF_INET, ip, &serv_addr.sin_addr)
+        <= 0) {
+        printf("\nInvalid address/ Address not supported \n");
+        return -1;;
+    }
+    addr_size = sizeof(serv_addr);
+    int result = connect(socketfd, (struct sockaddr*)&serv_addr, addr_size);
+    if(result < 0) {
+        return -1;
+    }
+
+    /* Write */
+    int bytesWritten = write(socketfd, h->originalRequest, h->originalRequestSize);
+
+    /* Read */
+    char buffer[MAX_INPUT_BUFFER] = { 0 };
+    int bytesRead = read(socketfd, buffer, MAX_INPUT_BUFFER);
+
+    /* Return */
+    size_t bytesReturned = write(h->clientfd, buffer, bytesRead);
+
+    /* Close */
+    close(socketfd);
+
+    /* Return */
 
 }
 
@@ -406,7 +552,6 @@ void *requestWorker(void *data) {
                 http_packet_t *p = h->packet;
                 free(h);
                 requestHandle(p);
-
                 close(p->clientfd);
                 requestDestroy(p);
             }
@@ -479,6 +624,12 @@ uint32_t serverHandleRequest(int socketfd) {
     memset(packet, '\x00', sizeof(struct http_packet_t));
     packet->clientfd = socketfd;
 
+    /* Save the original request */
+    char *requestcopy = (char *)malloc(totalRead);
+    memcpy(requestcopy, buffer, totalRead);
+    packet->originalRequest = requestcopy;
+    packet->originalRequestSize = totalRead;
+
     /* Transform to HTTP Protocol */
     requestParse(packet, buffer, bytesRead);
 
@@ -515,16 +666,7 @@ void *serverHandleAccept(void *data) {
     printf("[+]: Accept Handler Created (TID: %d)\n", gettid());
 
     int clientfd = * (( int* )data);
-
-    /* If server type is a coordinator, do not handle request but forward it and return reply */
-    if ( serverType == SERVER_TYPE_COORDINATOR) {
-        coordinator_requestForward(clientfd);
-    }
-
-    /* If server type is a store, handle request */
-    else {
-        serverHandleRequest(clientfd);
-    }
+    serverHandleRequest(clientfd);
 
     printf("[+]: Accept Handler  Finished (TID: %d)\n", gettid());
 }
@@ -618,18 +760,17 @@ uint32_t serverListen(int port) {
  * @param argv 
  * @return uint32_t 
  */
-uint32_t serverBecomeStore(int argc, char **argv) {
+uint32_t serverBecomeStore(int port) {
 
-    if( serverType != SERVER_TYPE_STORE) {
+    if( serverType != SERVER_TYPE_STORE || port < 0 || port < 1000) {
+        printf("[!]: Invalid or missing options\n");
         exit(EXIT_FAILURE);
     }
 
     printf("[+]: Started KVP Store server: (%d)\n", gettid());
 
-    int port = atoi(argv[1]);   /* Port */
-
     /* Create and initialize hash table */
-    store = hashtable_create(256, hashtable_hash);
+    store = hashtable_create(STORE_TABLEMAXSIZE, hashtable_hash);
 
     while(true) {
 
@@ -649,17 +790,52 @@ uint32_t serverBecomeStore(int argc, char **argv) {
  * @param argv 
  * @return uint32_t 
  */
-uint32_t serverBecomeCoordinator(int argc, char **argv) {
+uint32_t serverBecomeCoordinator(int port, char *stores) {
 
-    if( serverType != SERVER_TYPE_COORDINATOR) {
+    if( serverType != SERVER_TYPE_COORDINATOR || port == 0 || port < 1000 || stores == NULL) {
+        printf("[!]: Invalid or missing options\n");
         exit(EXIT_FAILURE);
     }
 
     printf("[+]: Started KVP Coordinator server: (%d)\n", gettid());
 
     /* Create and intialize hash ring */
+    ring = hashring_create(4000000, hashring_hash_jenkins);
 
-    int port = atoi(argv[1]);   /* Port */
+    /* Add store servers */
+    char *storeline= NULL;
+    char *storeip;
+    char *storeport;
+    char delim[] = ",";
+
+    printf("Test: %s\n", stores);
+    storeline = strtok(stores, delim);
+    char *servers[MAX_SERVERS] = { 0 };
+    size_t size = 0;
+
+    while(storeline != NULL) {
+        if(size > MAX_SERVERS) {
+            break;
+        }
+        servers[size] = strdup(storeline);
+        size++;
+        storeline = strtok(NULL, delim);
+    }
+
+
+    for(uint32_t i = 0; i < size; i++) {
+        
+        storeip = strtok(servers[i], ":");
+        storeport = strtok(NULL, ":");
+    
+        if (storeip != NULL && storeport != NULL) {
+            hashring_addserver(ring, storeip, atoi(storeport), 10);
+        } else {
+            fprintf(stderr, "Invalid format in list\n");
+        }
+        
+        free(servers[i]);
+    }
 
     while(true) {
 
@@ -688,7 +864,10 @@ void exit_cleanup(void) {
     */
     if(store != NULL) {
         hashtable_delete(store);
-        free(store);
+    }
+
+    if(ring != NULL) {
+        hashring_destroy(ring);
     }
 
     /* Destory locks */
@@ -722,6 +901,11 @@ uint8_t init_httprequestqueue(void) {
 }
 
 
+/* 
+[**************************************************************************************************************************************************]
+                                                            MAIN
+[**************************************************************************************************************************************************]
+*/
 
 /**
  * @brief Main
@@ -732,12 +916,57 @@ uint8_t init_httprequestqueue(void) {
  */
 int main(int argc, char **argv) {
 
+    int typeflag = 0;
+    char *stores = NULL;
+    char *type = NULL;
+    int port = 0;
+    int opt;
 
-    /* 
-    TO DO: 
-    Input handling, for now we manually control the input 
-    */
+    struct option long_options[] = {
+        {"help",  no_argument,       NULL, 'h'},
+        {"store", required_argument, NULL, 's'},
+        {"type",  required_argument, NULL, 't'},
+        {"port",  required_argument, NULL, 'p'},
+        {NULL,    0,                 NULL,  0 }
+    };
 
+    while( (opt = getopt_long(argc, argv, "t:s:p:h?", long_options, NULL)) != -1) {
+
+        switch(opt) {
+            case 't':
+                type = strdup(optarg);
+                break;
+            case 's':
+                stores = strdup(optarg);
+                break;
+            case 'p':
+                port = atoi(strdup(optarg));
+                break;
+            case '?':
+                printf("Bad option: %c\n", optopt); 
+                help();
+                break;
+            default:
+                help();
+        }
+    }        
+
+    
+    if(type == NULL) {
+        help();
+        exit(EXIT_FAILURE);
+    }
+
+    if(strcmp(type, "COORDINATOR") == 0 || strcmp(type, "coordinator") == 0) {
+        serverType = SERVER_TYPE_COORDINATOR;
+    }
+    else if( strcmp(type, "STORE") == 0 || strcmp(type, "store") == 0 ) {
+        serverType = SERVER_TYPE_STORE;
+    }
+    else {
+        help();
+    }
+    
     /* Setup request queue */
     if ( init_httprequestqueue() == EXIT_FAILURE ) {
         printf("[!]: Failed to allocate memory for requests queue\n");
@@ -745,21 +974,20 @@ int main(int argc, char **argv) {
     }
 
     /* Setup request handling workers */
-    printf("[+]: Creating requets handlers\n");
+    printf("[+]: Creating request handlers\n");
     pthread_t workers[MAX_WORKERS] = { 0 };
     for(uint32_t i = 0; i < MAX_WORKERS; i++) {
         pthread_create(&workers[i], NULL, requestWorker, NULL);
     }
 
-
     switch(serverType) {
 
         case SERVER_TYPE_COORDINATOR:
-            serverBecomeCoordinator(argc, argv);
+            serverBecomeCoordinator(port, stores);
             break;
 
         case SERVER_TYPE_STORE:
-            serverBecomeStore(argc, argv);
+            serverBecomeStore(port);
             break;
 
         default:
