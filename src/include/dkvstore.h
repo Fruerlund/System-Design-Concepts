@@ -67,7 +67,6 @@ cmd=SET&key=value
 
 /*
 Supported CMDs:
-
 SET: Inserts a key, value pair into the store.
 GET: Gets a value from a given key from the store.
 REM: Removes a value from a given key from the store.

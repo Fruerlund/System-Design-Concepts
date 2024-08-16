@@ -5,6 +5,10 @@ echo "Starting Docker Service..."
 service docker start
 echo ""
 
+sleep 5
+
+tmux
+
 echo "Checking for docker image"
 # Build Docker image if not exists
 IMAGE=$( docker image ls | awk 'NR > 1' | cut -d ' ' -f 1 )
@@ -15,6 +19,7 @@ else
     echo "Building Docker image..."
     docker build -t systemdesign -f Dockerfile .. --no-cache
 fi
+
 
 # Setup firewall rules
 echo "Setting up firewall rules..."
@@ -38,6 +43,7 @@ tmux split-window -v 'docker run --rm -it --network="host" --name coordinator sy
 
 # Start web servers
 echo "Starting web servers..."
+
 python3 -m http.server 5000 &
 python3 -m http.server 5001 &
 python3 -m http.server 5002 &
@@ -47,8 +53,8 @@ sleep 2
 
 # Start load balancer
 echo "Starting load balancer..."
-tmux split-window -h 'docker run --rm -it --network="host" --name loadbalancer systemdesign /app/loadbalancer 127.0.0.1:5000 127.0.0.1:5001 127.0.0.1:5002'
+tmux split-window -v 'docker run --rm -it --network="host" --name loadbalancer systemdesign /app/loadbalancer 127.0.0.1:5000 127.0.0.1:5001 127.0.0.1:5002'
 
 # Attach to tmux session
-echo "Attaching to TMUX session..."
-tmux attach-session -t services
+echo "To attach to TMUX session, execute the command..."
+echo "tmux attach-session -t services"
