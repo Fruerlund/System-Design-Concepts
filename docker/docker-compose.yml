@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  app1:
+    image: systemdesign
+    container_name: loadbalancer
+    environment:
+      - USER_INPUT=operation1
+    ports:
+      - "random_port1:8000"
+
+  app2:
+    image: systemdesign
+    container_name: dkvstore-coordinator
+    environment:
+      - USER_INPUT=operation2
+    ports:
+      - "random_port2:8000"
+
+  app3:
+    image: systemdesign
+    container_name: dkvstore-store
+    environment:
+      - USER_INPUT=operation2
+    ports:
+      - "random_port2:8000"
+
+app4:
+    image: systemdesign
+    container_name: dkvstore-store
+    environment:
+      - USER_INPUT=operation2
+    ports:
+      - "random_port2:8000"
+
+app5:
+    image: systemdesign
+    container_name: dkvstore-store
+    environment:
+      - USER_INPUT=operation2
+    ports:
+      - "random_port2:8000"
