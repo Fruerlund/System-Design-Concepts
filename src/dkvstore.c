@@ -11,9 +11,6 @@
  * 
 */
 
-/**
- * TODO: 1. IMPLEMENT THE REMAINING OPERATIONS, DEL, ADD AND REM
- */
 
 #include "./include/dkvstore.h"
 

@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 import requests
+from sys import argv
 
 #curl http://127.0.0.1:33333/api --data "cmd=set&key=abc&value=def"
 #curl http://127.0.0.1:33333/api --data "cmd=get&key=abc"
@@ -49,7 +50,7 @@ class API(object):
         })
 
 app = Flask(__name__)
-api = API("127.0.0.1", 31337)
+api = API(argv[2], argv[3])
 
 @app.route("/")
 def root():
@@ -87,5 +88,5 @@ def insert():
     return "\r\n"
 
 
-app.run(port=33333, debug=True)
+app.run(port=argv[1], debug=True)
     
