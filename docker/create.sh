@@ -44,9 +44,10 @@ tmux split-window -v 'docker run --rm -it --network="host" --name coordinator sy
 # Start web servers
 echo "Starting web servers..."
 
-python3 -m http.server 5000 &
-python3 -m http.server 5001 &
-python3 -m http.server 5002 &
+# Server port, IP:PORT for coordinator
+python3 ../src/server.py 5000 127.0.0.1 31337 &
+python3 ../src/server.py 5001 127.0.0.1 31337 &
+python3 ../src/server.py 5002 127.0.0.1 31337 &
 
 # Wait
 sleep 2
