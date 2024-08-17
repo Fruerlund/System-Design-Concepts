@@ -306,9 +306,11 @@ uint32_t requestHandle(http_packet_t *h) {
         case HTTP_POST:
         
             char *http_data_copy = strdup(h->httpData);
+
             /* Get command and command data */
             char *op = strtok(http_data_copy, "&");
             char *opdata = strtok(NULL, "&");
+
             if(op == NULL || opdata == NULL) {
                 sendHTTPCode(h->clientfd, 400);
             }
@@ -316,6 +318,7 @@ uint32_t requestHandle(http_packet_t *h) {
             /* Split op into fields fields*/
             char *op_field = strtok(op, "=");
             char *op_value = strtok(NULL, "=");
+
             if(op_field == NULL || op_value == NULL) {
                 sendHTTPCode(h->clientfd, 400);
             }
@@ -323,6 +326,7 @@ uint32_t requestHandle(http_packet_t *h) {
             /* Split op data into fields */
             char *op_datafield = strtok(opdata, "=");
             char *op_datavalue = strtok(NULL, "=");
+
             if(op_datafield == NULL || op_datavalue == NULL) {
                 sendHTTPCode(h->clientfd, 400);
             }
@@ -388,22 +392,78 @@ uint32_t requestHandle(http_packet_t *h) {
             }
 
             if(strcmp(op_value, "REM") == 0) {
-                bool r = false;
-                if ( ( r = hashtable_remove(store, op_datavalue)) == false) {
-                    sendHTTPCode(h->clientfd, 404);
+
+                if(serverType == SERVER_TYPE_STORE) {
+                    bool r = false;
+                    if ( ( r = hashtable_remove(store, op_datavalue)) == false) {
+                        sendHTTPCode(h->clientfd, 404);
+                    }
+                    else {
+                        sendHTTPCode(h->clientfd, 200);
+                    }
                 }
                 else {
-                    sendHTTPCode(h->clientfd, 200);
+                    sendHTTPCode(h->clientfd, 501);
                 }
                 break;
             }
 
             if(strcmp(op_value, "ADD") == 0) {
 
+                if(serverType == SERVER_TYPE_COORDINATOR) {
+
+                    ring_element_t *e = NULL;
+
+                    /* IP in op_datavalue */
+
+                    char *port = strtok( (op_datavalue + (strlen(op_datavalue) + 1)), "&");
+                    char *weight = strtok(NULL, "&");
+
+                    char *port_value = strtok(port, "=");
+                    port_value = strtok(NULL, "=");
+
+                    char *weight_value = strtok(weight, "=");
+                    weight_value = strtok(NULL, "=");
+
+                    if(port_value != NULL || weight_value != NULL || op_datavalue != NULL ) {
+                        if ( ( e = hashring_addserver(ring, op_datavalue, atoi(port_value), atoi(weight_value)) ) == NULL) {
+                            sendHTTPCode(h->clientfd, 400);
+                            break;
+                        }
+                        else {
+                            sendHTTPCode(h->clientfd, 200);
+                            break;
+                        }
+                    }
+                    sendHTTPCode(h->clientfd, 501);
+                    break;
+                }
             }
 
             if(strcmp(op_value, "DEL") == 0) {
 
+                 if(serverType == SERVER_TYPE_COORDINATOR) {
+
+                    /* IP in op_datavalue */
+
+                    char *port = strtok( (op_datavalue + (strlen(op_datavalue) + 1)), "&");
+                    char *port_value = strtok(port, "=");
+                    port_value = strtok(NULL, "=");
+
+                    if(port_value != NULL || op_datavalue != NULL ) {
+                        
+                        if ( ( hashring_removeserver(ring, op_datavalue, atoi(port_value)) ) != EXIT_SUCCESS)  {
+                            sendHTTPCode(h->clientfd, 404);
+                            break;
+                        }
+                        else {
+                            sendHTTPCode(h->clientfd, 200);
+                            break;
+                        }
+                    }
+                    sendHTTPCode(h->clientfd, 501);
+                    break;
+                }
             }
 
             if(strcmp(op_value, "SYNC") == 0) {

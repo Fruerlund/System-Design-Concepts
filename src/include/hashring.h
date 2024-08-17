@@ -718,24 +718,31 @@ uint32_t hashring_removevirtualnodes(hashring_t *r, ring_element_t *e) {
     /* Suffix: 127.0.0.1 -> 127.0.0.1-1 */
 
     char buffer[4096] = { 0 };
+    char buffertwo[4096] = { 0 };
+
     ring_element_t *v = NULL;
 
     for(uint32_t i = 0; i < e->element.server->numberofvirtualnodes; i++) {
 
-        snprintf(buffer, ((size_t)4096), "%s-%u", e->element.server->ip, i);
+        snprintf(buffer, ((size_t)4096), "%s-%u-%u", e->element.server->ip, i, e->element.server->port);
         char *ip_modified = (char *)malloc( strlen(buffer) );
         strncpy(ip_modified, buffer, strlen(buffer));
+
+        snprintf(buffertwo, ((size_t)4096), "%s-%u", e->element.server->ip, i);
+        char *ip_noport = (char *)malloc( strlen(buffertwo) );
+        strncpy(ip_noport, buffertwo, strlen(buffertwo));
 
         uint32_t hash = r->fn(ip_modified);
         v = r->elements[hash];
 
         if(v != NULL) {
-            hashring_removeserver(r, ip_modified, e->element.server->port);
+            hashring_removeserver(r, ip_noport, e->element.server->port);
         }
 
         v = NULL;
 
         free(ip_modified);
+        free(ip_noport);
 
     }
 
@@ -1084,7 +1091,7 @@ uint32_t hashring_hash_jenkins(char *key) {
     uint32_t val = (hash % 4000000) + 1;
     
 
-    //printf("%s->%d\n", key, val);
+    printf("%s->%d\n", key, val);
 
     return val;
 

@@ -67,11 +67,11 @@ cmd=SET&key=value
 
 /*
 Supported CMDs:
-SET: Inserts a key, value pair into the store.
-GET: Gets a value from a given key from the store.
-REM: Removes a value from a given key from the store.
-ADD: Adds a new data server into the hash ring.
-DEL: Deletes a data server from the hash ring.
+SET: Inserts a key, value pair into the store.              Takes key=value parameter.
+GET: Gets a value from a given key from the store.          Takes key parameter.
+REM: Removes a value from a given key from the store.       Takes key parameter.
+ADD: Adds a new data server into the hash ring.             Takes ip parameter, port parameter and weight.
+DEL: Deletes a data server from the hash ring.              Takes ip parameter and port parameter.
 */
 
 

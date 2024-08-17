@@ -13,7 +13,7 @@ class API(object):
         
         self.url = "http://{}:{}".format(self.ip, str(self.port))
         
-    def add(self, key, value):
+    def set(self, key, value):
         
         return requests.post(self.url, data={
             "cmd":"SET",
@@ -21,21 +21,35 @@ class API(object):
         })
         
 
-    def delete(self, key):
+    def rem(self, key):
         return requests.post(self.url, data={
             "cmd":"REM",
             "key":key
         })
 
-    def lookup(self, key):
+    def get(self, key):
         return requests.post(self.url, data={
             "cmd":"GET",
             "key":key
         })
 
+    def add(self, ip, port, weight):
+        return requests.post(self.url, data={
+            "cmd":"ADD",
+            "ip":ip,
+            "port":port,
+            "weight":weight
+        })
+
+    def delete(self, ip, port):
+        return requests.post(self.url, data={
+            "cmd":"DEL",
+            "ip":ip,
+            "port":port
+        })
 
 app = Flask(__name__)
-api = API("127.0.0.1", 5556)
+api = API("127.0.0.1", 31337)
 
 @app.route("/")
 def root():
@@ -51,17 +65,22 @@ def insert():
             command = request.form["cmd"].upper()
 
             if(command == "GET"):
-                r = api.lookup( request.form["key"] )
+                r = api.get( request.form["key"] )
                 return r.text
             if(command == "SET"):
                 key = request.form["key"]
                 value = request.form["value"]
-                r = api.add(key, value)
+                r = api.set(key, value)
                 return r.text
             if(command == "REM"):
-                r = api.delete(request.form["key"])
+                r = api.rem(request.form["key"])
                 return r.text
-          
+            if(command == "ADD"):
+                r = api.add(request.form["ip"], request.form["port"], request.form["weight"])
+                return r.text
+            if(command == "DEL"):
+                r = api.delete(request.form["ip"], request.form["port"])
+                return r.text
             return "OK\r\n"
     
     
